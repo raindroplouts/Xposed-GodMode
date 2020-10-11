@@ -4,13 +4,13 @@ import android.app.Activity;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
 
 import com.viewblocker.jrsen.injection.ViewController;
 import com.viewblocker.jrsen.injection.util.Logger;
 import com.viewblocker.jrsen.injection.util.Property;
 import com.viewblocker.jrsen.rule.ActRules;
 import com.viewblocker.jrsen.rule.ViewRule;
+import com.viewblocker.jrsen.util.Preconditions;
 
 import java.lang.ref.WeakReference;
 import java.util.List;
@@ -26,7 +26,7 @@ import de.robv.android.xposed.XC_MethodHook;
 
 public final class ActivityLifecycleHook extends XC_MethodHook implements Property.OnPropertyChangeListener<ActRules> {
 
-    private static final WeakHashMap<Activity, OnLayoutChangeListener> sActivities = new WeakHashMap<>();
+    private static final WeakHashMap<Activity, HierarchyObserver> sActivities = new WeakHashMap<>();
     private static final ActRules sActRules = new ActRules();
 
     @Override
@@ -39,17 +39,15 @@ public final class ActivityLifecycleHook extends XC_MethodHook implements Proper
          所以在Activity的子类中有可能去requestFeature会导致异常所以尽量找一个很靠后的生命周期函数*/
         if ("onPostResume".equals(methodName)) {
             if (!sActivities.containsKey(activity)) {
-                OnLayoutChangeListener listener = new OnLayoutChangeListener(activity);
-                decorView.setOnHierarchyChangeListener(listener);
-                decorView.getViewTreeObserver().addOnGlobalLayoutListener(listener);
-                sActivities.put(activity, listener);
+                HierarchyObserver observer = new HierarchyObserver(activity);
+                observer.register(activity.getWindow().getDecorView());
+                sActivities.put(activity, observer);
             }
             Logger.d("ActivityHook", "resume:" + sActivities);
         } else if ("onDestroy".equals(methodName)) {
-            OnLayoutChangeListener listener = sActivities.remove(activity);
+            HierarchyObserver observer = sActivities.remove(activity);
             Logger.d("ActivityHook", "destroy:" + sActivities);
-            decorView.setOnHierarchyChangeListener(null);
-            decorView.getViewTreeObserver().removeOnGlobalLayoutListener(listener);
+            if (observer != null) observer.unregister(activity.getWindow().getDecorView());
         }
     }
 
@@ -89,30 +87,57 @@ public final class ActivityLifecycleHook extends XC_MethodHook implements Proper
         }
     }
 
-    static final class OnLayoutChangeListener implements ViewTreeObserver.OnGlobalLayoutListener, ViewGroup.OnHierarchyChangeListener {
+    static final class HierarchyObserver implements ViewGroup.OnHierarchyChangeListener {
 
         final WeakReference<Activity> activityReference;
 
-        OnLayoutChangeListener(Activity activity) {
+        HierarchyObserver(Activity activity) {
             activityReference = new WeakReference<>(activity);
         }
 
         @Override
         public void onChildViewAdded(View parent, View child) {
-            onGlobalLayout();
+            Logger.d("ViewBlocker", "add view:" + child);
+            register(child);
+            applyRuleIfMatchCondition();
         }
 
         @Override
         public void onChildViewRemoved(View parent, View child) {
-            onGlobalLayout();
+            Logger.d("ViewBlocker", "remove view:" + child);
+            unregister(child);
+            applyRuleIfMatchCondition();
         }
 
-        @Override
-        public void onGlobalLayout() {
-            Activity activity = activityReference.get();
-            List<ViewRule> rules = activity != null ? sActRules.get(activity.getComponentName().getClassName()) : null;
-            if (rules != null && !rules.isEmpty()) {
-                ViewController.applyRuleBatch(activity, rules);
+        void register(View view) {
+            if (view instanceof ViewGroup) {
+                ViewGroup viewGroup = (ViewGroup) view;
+                viewGroup.setOnHierarchyChangeListener(this);
+                for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                    register(viewGroup.getChildAt(i));
+                }
+            }
+        }
+
+        void unregister(View view) {
+            if (view instanceof ViewGroup) {
+                ViewGroup childGroup = (ViewGroup) view;
+                for (int i = 0; i < childGroup.getChildCount(); i++) {
+                    onChildViewRemoved(childGroup, childGroup.getChildAt(i));
+                }
+                childGroup.setOnHierarchyChangeListener(null);
+            }
+        }
+
+        private void applyRuleIfMatchCondition() {
+            try {
+                Activity activity = Preconditions.checkNotNull(activityReference.get());
+                List<ViewRule> rules = Preconditions.checkNotNull(sActRules.get(activity.getComponentName().getClassName()));
+                if (!rules.isEmpty()) {
+                    ViewController.applyRuleBatch(activity, rules);
+                }
+            } catch (Exception ignore) {
+//                ignore.printStackTrace();
             }
         }
     }

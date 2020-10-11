@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.text.TextUtils;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +22,7 @@ import com.viewblocker.jrsen.BuildConfig;
 import com.viewblocker.jrsen.injection.bridge.GodModeManager;
 import com.viewblocker.jrsen.injection.bridge.ManagerObserver;
 import com.viewblocker.jrsen.injection.hook.ActivityLifecycleHook;
+import com.viewblocker.jrsen.injection.hook.DispatchKeyEventHook;
 import com.viewblocker.jrsen.injection.hook.DispatchTouchEventHook;
 import com.viewblocker.jrsen.injection.util.Logger;
 import com.viewblocker.jrsen.injection.util.PackageManagerUtils;
@@ -37,14 +39,14 @@ import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import static com.viewblocker.jrsen.BlockerApplication.TAG;
-
 
 /**
  * Created by jrsen on 17-10-13.
  */
 
 public final class BlockerInjector implements IXposedHookLoadPackage {
+
+    public static final String TAG = "ViewBlocker";
 
     public static Property<Boolean> switchProp = new Property<>();
     public static Property<ActRules> actRuleProp = new Property<>();
@@ -150,6 +152,9 @@ public final class BlockerInjector implements IXposedHookLoadPackage {
 
         //Disable show layout margin bound
         XposedHelpers.findAndHookMethod(ViewGroup.class, "onDebugDrawMargins", Canvas.class, Paint.class, XC_MethodReplacement.DO_NOTHING);
+
+        //Volume key select
+        XposedHelpers.findAndHookMethod(Activity.class, "dispatchKeyEvent", KeyEvent.class, new DispatchKeyEventHook());
 
         //Drag view support
         XposedHelpers.findAndHookMethod(View.class, "dispatchTouchEvent", MotionEvent.class, new DispatchTouchEventHook());

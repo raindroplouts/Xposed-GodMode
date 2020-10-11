@@ -3,6 +3,7 @@ package com.viewblocker.jrsen.injection;
 import android.app.Activity;
 import android.util.Pair;
 import android.util.SparseArray;
+import android.util.SparseIntArray;
 import android.view.View;
 import android.view.ViewGroup;
 
@@ -23,35 +24,42 @@ import static com.viewblocker.jrsen.BlockerApplication.TAG;
 
 public final class ViewController {
 
-    private static SparseArray<Pair<WeakReference<View>, ViewProperty>> blockedViewCache = new SparseArray<>();
+    private static final SparseIntArray ruleHashCache = new SparseIntArray();
+    private static final SparseArray<Pair<WeakReference<View>, ViewProperty>> blockedViewCache = new SparseArray<>();
 
-    private static void printBlockedViewInfo() {
-        Logger.d(TAG, "[BlockedViewCache info start------------------------------------]");
-        final int N = blockedViewCache.size();
-        for (int i = 0; i < N; i++) {
-            int key = blockedViewCache.keyAt(i);
-            Pair<WeakReference<View>, ViewProperty> pair = blockedViewCache.get(key);
-            Logger.d(TAG, String.format(Locale.getDefault(), "blocked view cache %d=%s\n%s", key, pair.first.get(), pair.second));
+    static final View.OnAttachStateChangeListener ATTACH_STATE_CHANGE_LISTENER = new View.OnAttachStateChangeListener() {
+        @Override
+        public void onViewAttachedToWindow(View v) {
         }
-        Logger.d(TAG, "[BlockedViewCache info end------------------------------------]");
-    }
+
+        @Override
+        public void onViewDetachedFromWindow(View v) {
+            v.removeOnAttachStateChangeListener(this);
+            int viewCodeHash = v.hashCode();
+            blockedViewCache.delete(viewCodeHash);
+            ruleHashCache.delete(ruleHashCache.indexOfValue(viewCodeHash));
+        }
+    };
 
     public static void applyRuleBatch(Activity activity, List<ViewRule> rules) {
         Logger.d(TAG, "[ApplyRuleBatch info start------------------------------------]");
         for (ViewRule rule : new ArrayList<>(rules)) {
             try {
                 Logger.d(TAG, "[Apply rule]:" + rule.toString());
-                Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(rule.hashCode());
+                int ruleHashCode = rule.hashCode();
+                int viewHashCode = ruleHashCache.get(ruleHashCode);
+                Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewHashCode);
                 View view = viewInfo != null ? viewInfo.first.get() : null;
-                if (view == null || ViewHelper.getAttachedActivityFromView(view) != activity) {
-                    blockedViewCache.remove(rule.hashCode());
+                if (view == null) {
+                    ruleHashCache.delete(ruleHashCode);
+                    blockedViewCache.delete(viewHashCode);
                     view = ViewHelper.findViewBestMatch(activity, rule);
                     Preconditions.checkNotNull(view, "apply rule fail not match any view");
                 }
                 boolean blocked = applyRule(view, rule);
                 if (blocked) {
+                    view.addOnAttachStateChangeListener(ATTACH_STATE_CHANGE_LISTENER);
                     Logger.i(TAG, String.format("[Success] %s#%s has been blocked", activity, view));
-                    printBlockedViewInfo();
                 } else {
                     Logger.i(TAG, String.format("[Skipped] %s#%s already be blocked", activity, view));
                 }
@@ -63,7 +71,9 @@ public final class ViewController {
     }
 
     public static boolean applyRule(View v, ViewRule viewRule) {
-        Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewRule.hashCode());
+        int ruleHashCode = viewRule.hashCode();
+        int viewHashCode = ruleHashCache.get(ruleHashCode);
+        Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewHashCode);
         View blockedView = viewInfo != null ? viewInfo.first.get() : null;
         if (blockedView == v && v.getVisibility() == viewRule.visibility) {
             return false;
@@ -86,8 +96,10 @@ public final class ViewController {
             v.requestLayout();
         }
         v.setVisibility(viewRule.visibility);
-        blockedViewCache.put(viewRule.hashCode(), Pair.create(new WeakReference<View>(v), viewProperty));
-        Logger.d(TAG, String.format(Locale.getDefault(), "apply rule add view cache %d=%s", viewRule.hashCode(), v));
+        viewHashCode = v.hashCode();
+        ruleHashCache.put(ruleHashCode, viewHashCode);
+        blockedViewCache.put(viewHashCode, Pair.create(new WeakReference<>(v), viewProperty));
+        Logger.d(TAG, String.format(Locale.getDefault(), "apply rule add view cache %d=%s", ruleHashCode, v));
         return true;
     }
 
@@ -95,16 +107,18 @@ public final class ViewController {
         for (ViewRule rule : new ArrayList<>(rules)) {
             try {
                 Logger.d(TAG, "revoke rule:" + rule.toString());
-                Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(rule.hashCode());
+                int ruleHashCode = rule.hashCode();
+                int viewHashCode = ruleHashCache.get(ruleHashCode);
+                Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewHashCode);
                 View view = viewInfo != null ? viewInfo.first.get() : null;
                 if (view == null) {
                     Logger.w(TAG, "view cache not found");
-                    blockedViewCache.remove(rule.hashCode());
+                    ruleHashCache.delete(ruleHashCode);
+                    blockedViewCache.delete(viewHashCode);
                     view = ViewHelper.findViewBestMatch(activity, rule);
                     Logger.w(TAG, "find view in activity" + view);
                     Preconditions.checkNotNull(view, "revoke rule fail can't found block view");
                 }
-                printBlockedViewInfo();
                 revokeRule(view, rule);
                 Logger.i(TAG, String.format("###revoke rule success [Act]:%s  [View]:%s", activity, view));
             } catch (NullPointerException e) {
@@ -114,7 +128,9 @@ public final class ViewController {
     }
 
     public static void revokeRule(View v, ViewRule viewRule) {
-        Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewRule.hashCode());
+        int ruleHashCode = viewRule.hashCode();
+        int viewHashCode = ruleHashCache.get(ruleHashCode);
+        Pair<WeakReference<View>, ViewProperty> viewInfo = blockedViewCache.get(viewHashCode);
         if (viewInfo != null && viewInfo.first.get() == v) {
             ViewProperty viewProperty = viewInfo.second;
             v.setAlpha(viewProperty.alpha);
@@ -126,8 +142,10 @@ public final class ViewController {
                 lp.height = viewProperty.layout_params_height;
                 v.requestLayout();
             }
-            blockedViewCache.remove(viewRule.hashCode());
-            Logger.d(TAG, String.format(Locale.getDefault(), "revoke blocked view %d=%s %s", viewRule.hashCode(), v, viewProperty));
+            v.removeOnAttachStateChangeListener(ATTACH_STATE_CHANGE_LISTENER);
+            ruleHashCache.delete(ruleHashCode);
+            blockedViewCache.remove(viewHashCode);
+            Logger.d(TAG, String.format(Locale.getDefault(), "revoke blocked view %d=%s %s", ruleHashCode, v, viewProperty));
         } else {
             // cache missing why?
             Logger.w(TAG, "view cache missing why?");

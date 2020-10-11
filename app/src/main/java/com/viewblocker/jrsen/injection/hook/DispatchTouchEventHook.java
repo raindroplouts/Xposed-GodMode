@@ -20,9 +20,9 @@ import com.viewblocker.jrsen.injection.ViewController;
 import com.viewblocker.jrsen.injection.ViewHelper;
 import com.viewblocker.jrsen.injection.bridge.GodModeManager;
 import com.viewblocker.jrsen.injection.util.Logger;
-import com.viewblocker.jrsen.injection.view.CancelView;
-import com.viewblocker.jrsen.injection.view.MirrorView;
-import com.viewblocker.jrsen.injection.view.ParticleView;
+import com.viewblocker.jrsen.injection.weiget.CancelView;
+import com.viewblocker.jrsen.injection.weiget.MaskView;
+import com.viewblocker.jrsen.injection.weiget.ParticleView;
 import com.viewblocker.jrsen.rule.ViewRule;
 import com.viewblocker.jrsen.util.Preconditions;
 
@@ -43,7 +43,7 @@ public final class DispatchTouchEventHook extends XC_MethodHook {
     private float x, y;
     private Bitmap snapshot;
     private ViewRule viewRule;
-    private MirrorView mirrorView;
+    private MaskView maskView;
     private CancelView cancelView;
     private boolean hasBlockEvent;
 
@@ -86,12 +86,9 @@ public final class DispatchTouchEventHook extends XC_MethodHook {
             float x = event.getX();
             float y = event.getY();
             if (isLongClick) {
-                mirrorView.updatePosition((int) (event.getRawX() - this.x), (int) (event.getRawY() - this.y));
-                if (Rect.intersects(cancelView.getRealBounds(), mirrorView.getRealBounds()) && !mirrorView.isMarked()) {
-                    mirrorView.setMarked(true);
-                } else if (!Rect.intersects(cancelView.getRealBounds(), mirrorView.getRealBounds()) && mirrorView.isMarked()) {
-                    mirrorView.setMarked(false);
-                }
+                maskView.updatePosition((int) (event.getRawX() - this.x), (int) (event.getRawY() - this.y));
+                Logger.i(TAG, "cancel bounds:" + cancelView.getRealBounds() + " mask bounds:" + maskView.getRealBounds());
+                maskView.setMarked(cancelView.getRealBounds().intersect(maskView.getRealBounds()));
             } else if (x < 0 || x > v.getWidth() || y < 0 || y > v.getHeight()) {
                 handler.removeCallbacks(pendingCheckForLongPress);
             }
@@ -130,8 +127,8 @@ public final class DispatchTouchEventHook extends XC_MethodHook {
         cancelView = new CancelView(v.getContext());
         cancelView.attachToContainer(container);
 
-        mirrorView = MirrorView.clone(v);
-        mirrorView.attachToContainer(container);
+        maskView = MaskView.clone(v);
+        maskView.attachToContainer(container);
 
         viewRule = ViewHelper.makeRule(v);
 
@@ -153,16 +150,16 @@ public final class DispatchTouchEventHook extends XC_MethodHook {
         }
 
         cancelView.detachFromContainer();
-        if (mirrorView.isMarked()) {
+        if (maskView.isMarked()) {
             //丢弃该条规则
             try {
-                mirrorView.detachFromContainer();
+                maskView.detachFromContainer();
                 viewRule.visibility = View.VISIBLE;
                 ViewController.revokeRule(v, viewRule);
                 if (Preconditions.checkBitmap(snapshot)) snapshot.recycle();
             } finally {
                 snapshot = null;
-                mirrorView = null;
+                maskView = null;
                 cancelView = null;
                 viewRule = null;
             }
@@ -182,23 +179,23 @@ public final class DispatchTouchEventHook extends XC_MethodHook {
             particleView.setOnAnimationListener(new ParticleView.OnAnimationListener() {
                 @Override
                 public void onAnimationStart(View animView, Animator animation) {
-                    mirrorView.setVisibility(View.INVISIBLE);
+                    maskView.setVisibility(View.INVISIBLE);
                 }
 
                 @Override
                 public void onAnimationEnd(View animView, Animator animation) {
                     try {
-                        mirrorView.detachFromContainer();
+                        maskView.detachFromContainer();
                         particleView.detachFromContainer();
                     } finally {
                         snapshot = null;
-                        mirrorView = null;
+                        maskView = null;
                         cancelView = null;
                         viewRule = null;
                     }
                 }
             });
-            particleView.boom(mirrorView);
+            particleView.boom(maskView);
         }
     }
 
